@@ -1,0 +1,7 @@
+.env
+data/logs/*
+!data/logs/.gitkeep
+__pycache__/
+*.pyc
+venv/
+.vscode/
