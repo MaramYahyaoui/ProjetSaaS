@@ -1,0 +1,62 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.13.4}
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports: ["9200:9200"]
+    volumes: [es_data:/usr/share/elasticsearch/data]
+    networks: [monitoring-net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-8.13.4}
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports: ["5601:5601"]
+    networks: [monitoring-net]
+    depends_on:
+      elasticsearch: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:5601/api/status | grep -q available"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:${ELASTIC_VERSION:-8.13.4}
+    environment:
+      - LS_JAVA_OPTS=-Xms256m -Xmx256m
+      - XPACK_MONITORING_ENABLED=false
+    ports: ["9600:9600"]
+    volumes:
+      - ./logstash/config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./data/logs:/data/logs
+      - ls_data:/usr/share/logstash/data
+    networks: [monitoring-net]
+    depends_on:
+      elasticsearch: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9600/ >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+networks:
+  monitoring-net:
+    driver: bridge
+
+volumes:
+  es_data:
+  ls_data:
+  mongo_data:
+  redis_data:
