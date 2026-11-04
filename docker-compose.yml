@@ -76,6 +76,23 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+  webapp:
+    build: ./webapp
+    env_file: .env
+    ports: ["8000:8000"]
+    volumes:
+      - ./data/logs:/data/logs
+    networks: [monitoring-net]
+    depends_on:
+      elasticsearch: {condition: service_healthy}
+      mongodb: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s      
 networks:
   monitoring-net:
     driver: bridge
