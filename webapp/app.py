@@ -1,8 +1,19 @@
 from flask import Flask
 
-app = Flask(__name__)
+from config import Config
+from routes import health
 
 
-@app.get("/")
-def index():
-    return "Hello World"
+def create_app():
+    app = Flask(__name__)
+    app.config.from_object(Config)
+    app.register_blueprint(health.bp)
+
+    @app.get("/")
+    def index():
+        return "Hello World"
+
+    return app
+
+
+app = create_app()
