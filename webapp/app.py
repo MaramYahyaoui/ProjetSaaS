@@ -1,7 +1,7 @@
 from flask import Flask, jsonify
 
 from config import Config
-from routes import health, upload
+from routes import files, health, upload
 
 
 def create_app():
@@ -9,6 +9,7 @@ def create_app():
     app.config.from_object(Config)
     app.register_blueprint(health.bp)
     app.register_blueprint(upload.bp)
+    app.register_blueprint(files.bp)
 
     @app.get("/")
     def index():
