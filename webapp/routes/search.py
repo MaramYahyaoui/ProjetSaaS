@@ -2,6 +2,7 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
+from history import extract_search, record_search
 from services import get_es
 
 bp = Blueprint("search", __name__)
@@ -76,9 +77,17 @@ def search():
     except Exception as exc:
         return jsonify({"error": "Recherche impossible", "detail": type(exc).__name__}), 503
 
+    total = res["hits"]["total"]["value"]
+    if page == 1:
+        try:
+            query_text, filters = extract_search(request.args)
+            record_search(query_text, filters, total)
+        except Exception:
+            pass  # l'historique ne doit jamais bloquer une recherche
+
     items = []
     for hit in res["hits"]["hits"]:
         source = hit["_source"]
         source["timestamp"] = source.pop("@timestamp", None)
         items.append({"id": hit["_id"], **source})
-    return jsonify({"total": res["hits"]["total"]["value"], "page": page, "per_page": per_page, "items": items})
+    return jsonify({"total": total, "page": page, "per_page": per_page, "items": items})

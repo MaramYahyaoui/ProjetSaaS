@@ -1,7 +1,8 @@
 from flask import Flask, jsonify
 
+import history
 from config import Config
-from routes import files, health, search,  upload
+from routes import files, health, search, searches, upload
 
 
 def create_app():
@@ -11,6 +12,12 @@ def create_app():
     app.register_blueprint(upload.bp)
     app.register_blueprint(files.bp)
     app.register_blueprint(search.bp)
+    app.register_blueprint(searches.bp)
+
+    try:
+        history.ensure_indexes()
+    except Exception:
+        pass  # MongoDB peut démarrer après la webapp
 
     @app.get("/")
     def index():
