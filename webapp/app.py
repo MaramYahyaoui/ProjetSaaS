@@ -2,8 +2,7 @@ from flask import Flask, jsonify
 
 import history
 from config import Config
-from routes import files, health, search, searches, upload
-
+from routes import api, files, health, search, searches, upload
 
 def create_app():
     app = Flask(__name__)
@@ -13,7 +12,7 @@ def create_app():
     app.register_blueprint(files.bp)
     app.register_blueprint(search.bp)
     app.register_blueprint(searches.bp)
-
+    app.register_blueprint(api.bp)
     try:
         history.ensure_indexes()
     except Exception:
