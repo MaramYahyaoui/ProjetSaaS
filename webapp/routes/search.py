@@ -51,6 +51,7 @@ def build_query(args):
 
 
 @bp.get("/search")
+@bp.get("/api/v1/logs")
 def search():
     try:
         query = build_query(request.args)
@@ -78,7 +79,7 @@ def search():
         return jsonify({"error": "Recherche impossible", "detail": type(exc).__name__}), 503
 
     total = res["hits"]["total"]["value"]
-    if page == 1:
+    if page == 1 and request.path == "/search":
         try:
             query_text, filters = extract_search(request.args)
             record_search(query_text, filters, total)

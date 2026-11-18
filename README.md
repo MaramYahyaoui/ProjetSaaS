@@ -56,3 +56,15 @@ Data view `logs-saas-*`, champ de temps `@timestamp` :
 ```bash
 docker compose down
 ```
+## API REST v1
+
+- POST /upload/preview : valide un fichier et renvoie les 10 premières lignes
+- POST /upload : valide, dépose le fichier et crée sa fiche (status queued)
+- GET /api/v1/files et /api/v1/files/<file_id> : fichiers uploadés et statut d'ingestion
+- GET /search et GET /api/v1/logs : recherche (q, level, service, date_from, date_to, page, per_page, sort, order)
+- GET /api/v1/logs/<id> : détail d'un log
+- GET /search/export : export CSV des résultats (mêmes filtres, limit jusqu'à 10000)
+- GET /api/v1/searches : historique des recherches ; DELETE pour supprimer
+- GET /api/v1/stats : KPI (total, aujourd'hui, erreurs, requêtes lentes, fichiers)
+- GET /api/v1/stats/timeline : logs et erreurs par heure
+- GET /health : état d'Elasticsearch, MongoDB et Redis
