@@ -90,10 +90,11 @@ def log_detail(log_id):
     if not hits:
         return jsonify({"error": "Log introuvable"}), 404
     hit = hits[0]
-    source = hit["_source"]
-    source["timestamp"] = source.pop("@timestamp", None)
-    return jsonify({"id": hit["_id"], "index": hit["_index"], **source})
-
+    source = dict(hit["_source"])
+    timestamp = source.get("@timestamp")
+    for key in ("@timestamp", "event", "host", "log"):
+        source.pop(key, None)
+    return jsonify({"id": hit["_id"], "index": hit["_index"], "timestamp": timestamp, **source})
 
 @bp.get("/search/export")
 def export_csv():
