@@ -1,7 +1,7 @@
 import csv
 import io
 from datetime import datetime, timezone
-
+from cache import STATS_TTL, get_cached, set_cached
 from flask import Blueprint, Response, jsonify, request
 
 from routes.search import MAX_WINDOW, build_query
@@ -28,6 +28,9 @@ def _safe_cell(value):
 
 @bp.get("/api/v1/stats")
 def stats():
+    cached = get_cached("cache:stats")
+    if cached is not None:
+        return jsonify({**cached, "cached": True})
     try:
         res = get_es().search(index=INDEX, size=0, track_total_hits=True, aggs={
             "today": {"filter": {"range": {"@timestamp": {"gte": "now/d"}}}},
@@ -42,15 +45,16 @@ def stats():
         files_total = get_mongo()["files"].count_documents({})
     except Exception:
         files_total = None
-    return jsonify({
+    result = {
         "total_logs": res["hits"]["total"]["value"],
         "logs_today": aggs.get("today", {}).get("doc_count", 0),
         "error_logs": aggs.get("errors", {}).get("doc_count", 0),
         "slow_requests": aggs.get("slow", {}).get("doc_count", 0),
         "files_uploaded": files_total,
         "by_level": {b["key"]: b["doc_count"] for b in aggs.get("by_level", {}).get("buckets", [])},
-    })
-
+    }
+    set_cached("cache:stats", result, STATS_TTL)
+    return jsonify({**result, "cached": False})
 
 @bp.get("/api/v1/stats/timeline")
 def timeline():
