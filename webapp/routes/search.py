@@ -2,6 +2,7 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
+from cache import SEARCH_TTL, get_cached, make_key, set_cached
 from history import extract_search, record_search
 from services import get_es
 
@@ -72,23 +73,28 @@ def search():
     if field != "@timestamp":
         sort.append({"@timestamp": {"order": "desc"}})
 
-    try:
-        res = get_es().search(index="logs-saas-*", query=query, sort=sort, from_=(page - 1) * per_page,
-                              size=per_page, track_total_hits=True, source_includes=SOURCE_FIELDS)
-    except Exception as exc:
-        return jsonify({"error": "Recherche impossible", "detail": type(exc).__name__}), 503
+    cache_key = make_key(request.args)
+    payload = get_cached(cache_key)
+    cached = payload is not None
+    if not cached:
+        try:
+            res = get_es().search(index="logs-saas-*", query=query, sort=sort, from_=(page - 1) * per_page,
+                                  size=per_page, track_total_hits=True, source_includes=SOURCE_FIELDS)
+        except Exception as exc:
+            return jsonify({"error": "Recherche impossible", "detail": type(exc).__name__}), 503
+        items = []
+        for hit in res["hits"]["hits"]:
+            source = hit["_source"]
+            source["timestamp"] = source.pop("@timestamp", None)
+            items.append({"id": hit["_id"], **source})
+        payload = {"total": res["hits"]["total"]["value"], "page": page, "per_page": per_page, "items": items}
+        set_cached(cache_key, payload, SEARCH_TTL)
 
-    total = res["hits"]["total"]["value"]
     if page == 1 and request.path == "/search":
         try:
             query_text, filters = extract_search(request.args)
-            record_search(query_text, filters, total)
+            record_search(query_text, filters, payload["total"])
         except Exception:
             pass  # l'historique ne doit jamais bloquer une recherche
 
-    items = []
-    for hit in res["hits"]["hits"]:
-        source = hit["_source"]
-        source["timestamp"] = source.pop("@timestamp", None)
-        items.append({"id": hit["_id"], **source})
-    return jsonify({"total": total, "page": page, "per_page": per_page, "items": items})
+    return jsonify({**payload, "cached": cached})
