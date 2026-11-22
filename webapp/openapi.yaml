@@ -1,0 +1,657 @@
+openapi: 3.0.3
+info:
+  title: LogMonitor SaaS API
+  version: 1.0.0
+  description: |
+    API REST de **LogMonitor SaaS** : upload de fichiers de logs (CSV, JSON), suivi de leur ingestion,
+    recherche, statistiques et historique des recherches.
+
+    Les erreurs renvoient toujours un objet JSON {"error": "message"}.
+servers:
+  - url: http://localhost:8000
+    description: Environnement local (docker compose)
+tags:
+  - name: Santé
+    description: État des services
+  - name: Fichiers
+    description: Upload, validation et suivi de l'ingestion
+  - name: Recherche
+    description: Recherche, détail et export des logs
+  - name: Statistiques
+    description: Indicateurs pour le tableau de bord
+  - name: Historique
+    description: Recherches effectuées
+paths:
+  /health:
+    get:
+      tags: [Santé]
+      operationId: getHealth
+      summary: État des dépendances
+      description: Teste Elasticsearch, MongoDB et Redis et mesure leur temps de réponse. Renvoie 503 si au moins un service est en panne.
+      responses:
+        "200":
+          description: Tous les services répondent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          description: Au moins un service est indisponible (status degraded ou down)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /upload/preview:
+    post:
+      tags: [Fichiers]
+      operationId: previewUpload
+      summary: Prévisualiser un fichier avant injection
+      description: |
+        Accepte un fichier CSV, JSON ou TXT (multipart/form-data).
+        Renvoie les 10 premières lignes + métadonnées (format détecté, nombre de colonnes, taille).
+        Aucune donnée n'est encore indexée.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Fichier de logs (CSV, JSON ou TXT)
+      responses:
+        "200":
+          description: Prévisualisation réussie
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewResponse"
+        "400":
+          description: Fichier manquant, format invalide ou structure incorrecte
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: Fichier trop volumineux (limite 100 Mo)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /upload:
+    post:
+      tags: [Fichiers]
+      operationId: uploadFile
+      summary: Uploader et lancer l'ingestion
+      description: |
+        Envoie le fichier vers Logstash pour indexation dans Elasticsearch.
+        Crée un enregistrement dans MongoDB (statut `queued` puis `processing` / `indexed` / `error`).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Fichier de logs (CSV, JSON ou TXT)
+      responses:
+        "202":
+          description: Fichier accepté, ingestion lancée
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadResponse"
+        "400":
+          description: Fichier invalide
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: Fichier trop volumineux
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/files:
+    get:
+      tags: [Fichiers]
+      operationId: listFiles
+      summary: Lister les fichiers uploadés
+      description: Liste paginée des fichiers avec tri et filtres (statut, format).
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [queued, processing, indexed, error]
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [csv, json, txt]
+      responses:
+        "200":
+          description: Liste des fichiers
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileListResponse"
+
+  /api/v1/files/{file_id}:
+    get:
+      tags: [Fichiers]
+      operationId: getFile
+      summary: Détail d'un fichier uploadé
+      description: Métadonnées et statut d'ingestion d'un fichier.
+      parameters:
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Identifiant MongoDB du fichier
+      responses:
+        "200":
+          description: Détail du fichier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileDetail"
+        "404":
+          description: Fichier introuvable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/search:
+    get:
+      tags: [Recherche]
+      operationId: searchLogs
+      summary: Rechercher des logs
+      description: |
+        Recherche full-text + filtres (niveau, service, plage de dates).
+        Résultats paginés (50 par page par défaut).
+        La recherche est enregistrée dans l'historique MongoDB.
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Texte libre (message, exception, endpoint…)
+        - name: level
+          in: query
+          schema:
+            type: string
+            enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+        - name: service
+          in: query
+          schema:
+            type: string
+            example: nginx
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Date de début (ISO 8601)
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Date de fin (ISO 8601)
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Résultats de recherche
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/logs/{log_id}:
+    get:
+      tags: [Recherche]
+      operationId: getLogDetail
+      summary: Détail d'un log
+      description: Retourne le document Elasticsearch complet d'un log.
+      parameters:
+        - name: log_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Identifiant du document Elasticsearch
+      responses:
+        "200":
+          description: Détail du log
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogDetail"
+        "404":
+          description: Log introuvable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/search/export:
+    get:
+      tags: [Recherche]
+      operationId: exportSearchCsv
+      summary: Exporter les résultats en CSV
+      description: |
+        Exporte les résultats de la recherche courante (mêmes filtres que `/api/v1/search`)
+        au format CSV. Limité aux 10 000 premiers résultats.
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: level
+          in: query
+          schema:
+            type: string
+            enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+        - name: service
+          in: query
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Fichier CSV
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/stats:
+    get:
+      tags: [Statistiques]
+      operationId: getStats
+      summary: Indicateurs du tableau de bord
+      description: |
+        KPI principaux : temps de réponse moyen, taux d'erreur 5xx,
+        utilisateurs actifs, volume de logs, etc.
+        Résultats mis en cache Redis (30 s).
+      parameters:
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [1h, 6h, 24h, 7d]
+            default: 24h
+          description: Fenêtre temporelle des statistiques
+      responses:
+        "200":
+          description: Statistiques agrégées
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsResponse"
+
+  /api/v1/searches:
+    get:
+      tags: [Historique]
+      operationId: listSearches
+      summary: Historique des recherches
+      description: Liste des recherches effectuées par l'utilisateur (ou toutes si admin).
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 50
+      responses:
+        "200":
+          description: Historique paginé
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchHistoryResponse"
+components:
+  schemas:
+    ServiceStatus:
+      type: object
+      required: [status, response_ms]
+      properties:
+        status:
+          type: string
+          enum: [up, down]
+        response_ms:
+          type: number
+          description: Temps de réponse en millisecondes
+          example: 5.8
+        cluster_status:
+          type: string
+          description: Uniquement pour Elasticsearch
+          example: green
+        error:
+          type: string
+          description: Présent si le service est en panne
+          example: ConnectionError
+        SearchResponse:
+      type: object
+      required: [hits, total, page, per_page]
+      properties:
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/LogSummary"
+        total:
+          type: integer
+          example: 342
+        page:
+          type: integer
+        per_page:
+          type: integer
+        took_ms:
+          type: number
+          description: Temps de réponse Elasticsearch
+
+    LogSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          type: string
+          enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+        service:
+          type: string
+        message:
+          type: string
+        response_time_ms:
+          type: number
+          nullable: true
+        http_status:
+          type: integer
+          nullable: true
+
+    LogDetail:
+      type: object
+      description: Document Elasticsearch complet
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        "@timestamp":
+          type: string
+          format: date-time
+        level:
+          type: string
+        service:
+          type: string
+        message:
+          type: string
+        exception:
+          type: string
+          nullable: true
+        endpoint:
+          type: string
+          nullable: true
+        response_time_ms:
+          type: number
+          nullable: true
+        http_status:
+          type: integer
+          nullable: true
+        user_id:
+          type: string
+          nullable: true
+
+    StatsResponse:
+      type: object
+      required: [window, generated_at]
+      properties:
+        window:
+          type: string
+          example: 24h
+        generated_at:
+          type: string
+          format: date-time
+        avg_response_time_ms:
+          type: number
+          example: 187.4
+        error_rate_5xx:
+          type: number
+          description: Pourcentage d'erreurs 5xx
+          example: 1.8
+        active_users:
+          type: integer
+          example: 42
+        logs_count:
+          type: integer
+          example: 128450
+        slow_queries:
+          type: integer
+          description: Requêtes > 3000 ms
+          example: 17
+        top_endpoints:
+          type: array
+          items:
+            type: object
+            properties:
+              endpoint:
+                type: string
+              avg_ms:
+                type: number
+              count:
+                type: integer
+
+    SearchHistoryResponse:
+      type: object
+      required: [items, total, page, per_page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchHistoryItem"
+        total:
+          type: integer
+        page:
+          type: integer
+        per_page:
+          type: integer
+
+    SearchHistoryItem:
+      type: object
+      required: [id, query, created_at, results_count]
+      properties:
+        id:
+          type: string
+        query:
+          type: string
+          example: level:ERROR service:flask
+        filters:
+          type: object
+          additionalProperties: true
+        results_count:
+          type: integer
+          example: 28
+        created_at:
+          type: string
+          format: date-time
+        user_id:
+          type: string
+          nullable: true
+    HealthResponse:
+      type: object
+      required: [status, services]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, down]
+        services:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ServiceStatus"
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: Invalid file format
+
+    PreviewResponse:
+      type: object
+      required: [format, lines, preview]
+      properties:
+        format:
+          type: string
+          enum: [csv, json, txt]
+        lines:
+          type: integer
+          description: Nombre de lignes lues pour la prévisualisation
+          example: 10
+        columns:
+          type: array
+          items:
+            type: string
+          description: Noms des colonnes (CSV uniquement)
+        preview:
+          type: array
+          items:
+            type: object
+          description: Les 10 premières lignes
+        size_bytes:
+          type: integer
+          example: 24576
+
+    UploadResponse:
+      type: object
+      required: [file_id, status, message]
+      properties:
+        file_id:
+          type: string
+          format: uuid
+          example: 672a1b2c3d4e5f6789012345
+        status:
+          type: string
+          enum: [queued, processing]
+          example: queued
+        message:
+          type: string
+          example: File accepted, ingestion started
+        filename:
+          type: string
+          example: nginx_access.csv
+
+    FileDetail:
+      type: object
+      required: [id, filename, format, status, uploaded_at]
+      properties:
+        id:
+          type: string
+        filename:
+          type: string
+        format:
+          type: string
+          enum: [csv, json, txt]
+        status:
+          type: string
+          enum: [queued, processing, indexed, error]
+        size_bytes:
+          type: integer
+        uploaded_at:
+          type: string
+          format: date-time
+        indexed_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        lines_count:
+          type: integer
+          nullable: true
+
+    FileListResponse:
+      type: object
+      required: [items, total, page, per_page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileDetail"
+        total:
+          type: integer
+        page:
+          type: integer
+        per_page:
+          type: integer
